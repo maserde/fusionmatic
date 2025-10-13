@@ -68,6 +68,35 @@ router.put('/udm/clients', async (req: Request, res: Response) => {
   }
 });
 
+// Simple endpoint for bash scripts - returns just the client count number
+router.get('/udm/count', async (_req: Request, res: Response) => {
+  try {
+    const redis = getRedisClient();
+    const udmData = await redis.get('udm:client_count');
+
+    if (!udmData) {
+      // Return 0 if no data found
+      res.setHeader('Content-Type', 'text/plain');
+      return res.status(200).send('0');
+    }
+
+    const parsedData = JSON.parse(udmData);
+    
+    // Return just the number as plain text
+    res.setHeader('Content-Type', 'text/plain');
+    return res.status(200).send(parsedData.clientCount.toString());
+
+  } catch (error: any) {
+    logger.error('Failed to get UDM client count', {
+      error: error.message,
+    });
+
+    // Return 0 on error
+    res.setHeader('Content-Type', 'text/plain');
+    return res.status(200).send('0');
+  }
+});
+
 router.get('/udm/status', async (_req: Request, res: Response) => {
   try {
     const redis = getRedisClient();
