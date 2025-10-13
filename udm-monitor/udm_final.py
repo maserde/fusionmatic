@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""
+UDM Client Monitor dengan Redis
+
+Cek client count, update Redis, hit webhook kalo perlu.
+Integrates dengan Redis system yang udah ada.
+"""
+
+import requests
+import time
+import logging
+import json
+
+# Config
+UDM_URL = "https://192.168.253.1/proxy/network/integration/v1/sites/88f7af54-98f8-306a-a1c7-c9349722b1f6/clients"
+UDM_HEADERS = {"X-API-KEY": "t3WbySI7ZzYTsydRkCU_4sdYdt5AyWqu", "Accept": "application/json"}
+WEBHOOK_URL = "http://192.168.253.1:8888/v1/webhooks/servers/main-server/states"  # Server lo di UDM yang sama
+THRESHOLD = 30
+CHECK_INTERVAL = 300
+SERVER_NAME = "main-server"
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+# Redis client (pake requests ke Redis REST API atau simple file-based tracking)
+def get_client_count():
+    """Get UDM client count"""
+    try:
+        response = requests.get(UDM_URL, headers=UDM_HEADERS, verify=False, timeout=10)
+        return response.json().get("totalCount", 0)
+    except Exception as e:
+        logging.error(f"Error getting client count: {e}")
+        return 0
+
+def check_existing_task():
+    """
+    Cek apakah webhook lagi ada task yang PROCESSING
+    Simple approach: cek last webhook call time
+    """
+    try:
+        # Simple file-based tracking instead of Redis
+        with open("last_task.json", "r") as f:
+            data = json.load(f)
+            last_call = data.get("timestamp", 0)
+            # Kalo last call kurang dari 2 menit yang lalu, masih processing
+            if time.time() - last_call < 120:  # 2 minutes
+                return data
+        return None
+    except:
+        return None
+
+def save_task_info(state):
+    """Save task info ke file"""
+    try:
+        data = {
+            "state": state,
+            "timestamp": time.time(),
+            "client_count": get_client_count()
+        }
+        with open("last_task.json", "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logging.error(f"Error saving task info: {e}")
+
+def trigger_state_change(state):
+    """Trigger webhook kalo gak ada task yang lagi jalan"""
+    
+    # Cek existing task
+    existing = check_existing_task()
+    if existing and existing.get("state") == state:
+        logging.info(f"⚠️ Task {state} baru aja dipanggil, skip...")
+        return
+    
+    try:
+        logging.info(f"🚀 Triggering webhook: {state}")
+        response = requests.put(WEBHOOK_URL, json={"state": state}, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.json()
+            task_id = result.get("data", {}).get("taskId", "unknown")
+            logging.info(f"✅ Webhook success: {state} (task: {task_id})")
+            save_task_info(state)  # Save info
+        else:
+            logging.error(f"❌ Webhook failed: HTTP {response.status_code}")
+            
+    except Exception as e:
+        logging.error(f"❌ Webhook error: {e}")
+
+def main():
+    logging.info("🚀 UDM Monitor dengan Redis integration started")
+    logging.info(f"📊 Threshold: {THRESHOLD} clients")
+    
+    # Disable SSL warnings
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    last_state = None
+    
+    while True:
+        try:
+            count = get_client_count()
+            logging.info(f"📊 Client count: {count}")
+            
+            # Logic dengan time check (opsional)
+            current_hour = time.localtime().tm_hour
+            is_business_hours = 6 <= current_hour < 18  # 6 AM - 6 PM
+            
+            if count > THRESHOLD and last_state != "UP":
+                logging.info(f"🔼 {count} > {THRESHOLD} → UP")
+                if not is_business_hours:
+                    logging.info("⚠️ Outside business hours, but client demand is high - forcing UP")
+                trigger_state_change("UP")
+                last_state = "UP"
+                
+            elif count < THRESHOLD and last_state != "DOWN":
+                logging.info(f"🔽 {count} < {THRESHOLD} → DOWN")
+                trigger_state_change("DOWN")
+                last_state = "DOWN"
+                
+            else:
+                logging.info(f"⏸️ No change needed (current: {last_state}, hour: {current_hour})")
+            
+            # Log current status
+            with open("udm_status.json", "w") as f:
+                json.dump({
+                    "client_count": count,
+                    "threshold": THRESHOLD,
+                    "last_state": last_state,
+                    "timestamp": time.time(),
+                    "last_check": time.strftime("%Y-%m-%d %H:%M:%S")
+                }, f)
+            
+            time.sleep(CHECK_INTERVAL)
+            
+        except KeyboardInterrupt:
+            logging.info("👋 Stopped by user")
+            break
+        except Exception as e:
+            logging.error(f"💥 Error: {e}")
+            time.sleep(60)
+
+if __name__ == "__main__":
+    main()
