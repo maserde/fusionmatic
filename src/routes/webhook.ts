@@ -11,10 +11,93 @@ import {
   updateTaskStatus,
   generateServerStateTaskKey,
   TaskStatus,
-  WorkerTask
+  WorkerTask,
+  getRedisClient
 } from '@/utils/redis';
 
 const router = Router();
+
+// UDM Client Count endpoints
+router.post('/udm/client-count', async (req: Request, res: Response) => {
+  const { clientCount, threshold = 30 } = req.body;
+
+  logger.info('UDM client count update received', {
+    clientCount,
+    threshold,
+    body: req.body,
+  });
+
+  if (typeof clientCount !== 'number') {
+    return ApiResponse.badRequest(res, 'Client count is required', 'clientCount must be a number');
+  }
+
+  try {
+    // Store UDM client count in Redis
+    const redis = getRedisClient();
+    const udmData = {
+      clientCount,
+      threshold,
+      timestamp: new Date().toISOString(),
+      lastUpdate: Date.now(),
+      status: clientCount > threshold ? 'HIGH' : clientCount < threshold ? 'LOW' : 'NORMAL'
+    };
+
+    await redis.setex('udm:client_count', 3600, JSON.stringify(udmData)); // 1 hour TTL
+
+    logger.info('UDM client count stored successfully', udmData);
+
+    return ApiResponse.ok(res, 'UDM client count updated successfully', udmData);
+
+  } catch (error: any) {
+    logger.error('Failed to update UDM client count', {
+      clientCount,
+      threshold,
+      error: error.message,
+    });
+
+    return ApiResponse.internalError(
+      res,
+      'Failed to update UDM client count',
+      error.message
+    );
+  }
+});
+
+router.get('/udm/status', async (_req: Request, res: Response) => {
+  try {
+    const redis = getRedisClient();
+    const udmData = await redis.get('udm:client_count');
+
+    if (!udmData) {
+      return ApiResponse.notFound(res, 'No UDM client count data found');
+    }
+
+    const parsedData = JSON.parse(udmData);
+    
+    // Also get current server task status
+    const taskKey = generateServerStateTaskKey('main-server');
+    const currentTask = await redis.get(taskKey);
+    
+    const responseData = {
+      ...parsedData,
+      currentTask: currentTask ? JSON.parse(currentTask) : null,
+      lastUpdateAgo: `${Math.round((Date.now() - parsedData.lastUpdate) / 1000)}s ago`
+    };
+
+    return ApiResponse.ok(res, 'UDM status retrieved successfully', responseData);
+
+  } catch (error: any) {
+    logger.error('Failed to get UDM status', {
+      error: error.message,
+    });
+
+    return ApiResponse.internalError(
+      res,
+      'Failed to get UDM status',
+      error.message
+    );
+  }
+});
 
 router.put('/servers/:serverName/states', async (req: Request, res: Response) => {
   const { serverName } = req.params;

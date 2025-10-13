@@ -12,12 +12,16 @@ import logging
 import json
 
 # Config
+# UDM API - cek client count aja
 UDM_URL = "https://192.168.253.1/proxy/network/integration/v1/sites/88f7af54-98f8-306a-a1c7-c9349722b1f6/clients"
 UDM_HEADERS = {"X-API-KEY": "t3WbySI7ZzYTsydRkCU_4sdYdt5AyWqu", "Accept": "application/json"}
-WEBHOOK_URL = "http://192.168.253.1:8888/v1/webhooks/servers/main-server/states"  # Server lo di UDM yang sama
+
+# Webhook ke server lo sendiri (yang handle Peplink FusionHub di OpenStack)
+# Ganti SERVER_NAME sesuai nama server FusionHub lo di OpenStack
+SERVER_NAME = "tunnel-server"  # Default, atau ganti dengan nama server lo: fusionhub_hiu_office, dll
+WEBHOOK_URL = f"http://localhost:8888/v1/webhooks/servers/{SERVER_NAME}/states"
 THRESHOLD = 30
 CHECK_INTERVAL = 300
-SERVER_NAME = "main-server"
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
