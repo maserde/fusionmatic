@@ -24,8 +24,8 @@ def get_client_count():
         response.raise_for_status()
         
         data = response.json()
-        # Count array length
-        client_count = len(data) if isinstance(data, list) else data.get('count', 0)
+        # Get total count from API response
+        client_count = data.get('totalCount', data.get('count', len(data) if isinstance(data, list) else 0))
         
         logging.info(f"📊 UDM Client count: {client_count}")
         return client_count
