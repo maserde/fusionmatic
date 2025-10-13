@@ -66,8 +66,26 @@ def save_task_info(state):
     except Exception as e:
         logging.error(f"Error saving task info: {e}")
 
+def update_udm_data(count):
+    """Update UDM client count via new endpoint"""
+    try:
+        logging.info(f"📊 Updating UDM data: {count} clients")
+        response = requests.put(
+            "http://localhost:8888/v1/webhooks/udm/clients",
+            json={"clientCount": count},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            logging.info(f"✅ UDM data updated successfully")
+        else:
+            logging.error(f"❌ UDM update failed: HTTP {response.status_code}")
+            
+    except Exception as e:
+        logging.error(f"❌ UDM update error: {e}")
+
 def trigger_state_change(state):
-    """Trigger webhook kalo gak ada task yang lagi jalan"""
+    """Trigger state change via bash scripts"""
     
     # Cek existing task
     existing = check_existing_task()
@@ -76,19 +94,40 @@ def trigger_state_change(state):
         return
     
     try:
-        logging.info(f"🚀 Triggering webhook: {state}")
-        response = requests.put(WEBHOOK_URL, json={"state": state}, timeout=30)
+        import subprocess
         
-        if response.status_code == 200:
-            result = response.json()
-            task_id = result.get("data", {}).get("taskId", "unknown")
-            logging.info(f"✅ Webhook success: {state} (task: {task_id})")
+        script_name = "startup-tunnel.sh" if state == "UP" else "shutdown-tunnel.sh"
+        script_path = f"scripts/{script_name}"
+        
+        logging.info(f"🚀 Executing bash script: {script_path}")
+        
+        # Set environment variables
+        env = {
+            "SERVER_NAME": SERVER_NAME,
+            "API_HOST": "http://localhost:8888"
+        }
+        
+        # Execute bash script
+        result = subprocess.run(
+            ["bash", script_path], 
+            env=env,
+            capture_output=True, 
+            text=True, 
+            timeout=60
+        )
+        
+        if result.returncode == 0:
+            logging.info(f"✅ Bash script success: {script_name}")
+            logging.info(f"Output: {result.stdout}")
             save_task_info(state)  # Save info
         else:
-            logging.error(f"❌ Webhook failed: HTTP {response.status_code}")
+            logging.error(f"❌ Bash script failed: {script_name}")
+            logging.error(f"Error: {result.stderr}")
             
+    except subprocess.TimeoutExpired:
+        logging.error(f"❌ Bash script timeout: {script_name}")
     except Exception as e:
-        logging.error(f"❌ Webhook error: {e}")
+        logging.error(f"❌ Bash script error: {e}")
 
 def main():
     logging.info("🚀 UDM Monitor dengan Redis integration started")
@@ -104,6 +143,9 @@ def main():
         try:
             count = get_client_count()
             logging.info(f"📊 Client count: {count}")
+            
+            # Update UDM data via new endpoint
+            update_udm_data(count)
             
             # Logic dengan time check (opsional)
             current_hour = time.localtime().tm_hour

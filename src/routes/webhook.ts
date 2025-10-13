@@ -18,12 +18,14 @@ import {
 const router = Router();
 
 // UDM Client Count endpoints
-router.post('/udm/client-count', async (req: Request, res: Response) => {
-  const { clientCount, threshold = 30 } = req.body;
+const UDM_THRESHOLD = 30; // Constant threshold
+
+router.put('/udm/clients', async (req: Request, res: Response) => {
+  const { clientCount } = req.body;
 
   logger.info('UDM client count update received', {
     clientCount,
-    threshold,
+    threshold: UDM_THRESHOLD,
     body: req.body,
   });
 
@@ -36,22 +38,25 @@ router.post('/udm/client-count', async (req: Request, res: Response) => {
     const redis = getRedisClient();
     const udmData = {
       clientCount,
-      threshold,
+      threshold: UDM_THRESHOLD,
       timestamp: new Date().toISOString(),
       lastUpdate: Date.now(),
-      status: clientCount > threshold ? 'HIGH' : clientCount < threshold ? 'LOW' : 'NORMAL'
+      status: clientCount > UDM_THRESHOLD ? 'HIGH' : clientCount < UDM_THRESHOLD ? 'LOW' : 'NORMAL'
     };
 
     await redis.setex('udm:client_count', 3600, JSON.stringify(udmData)); // 1 hour TTL
 
     logger.info('UDM client count stored successfully', udmData);
 
+    // Note: Auto-triggering will be handled by external Python script
+    // This endpoint only stores the client count data
+
     return ApiResponse.ok(res, 'UDM client count updated successfully', udmData);
 
   } catch (error: any) {
     logger.error('Failed to update UDM client count', {
       clientCount,
-      threshold,
+      threshold: UDM_THRESHOLD,
       error: error.message,
     });
 
