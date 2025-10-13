@@ -11,10 +11,127 @@ import {
   updateTaskStatus,
   generateServerStateTaskKey,
   TaskStatus,
-  WorkerTask
+  WorkerTask,
+  getRedisClient
 } from '@/utils/redis';
 
 const router = Router();
+
+// UDM Client Count endpoints
+const UDM_THRESHOLD = 30; // Constant threshold
+
+router.put('/udm/clients', async (req: Request, res: Response) => {
+  const { clientCount } = req.body;
+
+  logger.info('UDM client count update received', {
+    clientCount,
+    threshold: UDM_THRESHOLD,
+    body: req.body,
+  });
+
+  if (typeof clientCount !== 'number') {
+    return ApiResponse.badRequest(res, 'Client count is required', 'clientCount must be a number');
+  }
+
+  try {
+    // Store UDM client count in Redis
+    const redis = getRedisClient();
+    const udmData = {
+      clientCount,
+      threshold: UDM_THRESHOLD,
+      timestamp: new Date().toISOString(),
+      lastUpdate: Date.now(),
+      status: clientCount > UDM_THRESHOLD ? 'HIGH' : clientCount < UDM_THRESHOLD ? 'LOW' : 'NORMAL'
+    };
+
+    await redis.setex('udm:client_count', 3600, JSON.stringify(udmData)); // 1 hour TTL
+
+    logger.info('UDM client count stored successfully', udmData);
+
+    // Note: Auto-triggering will be handled by external Python script
+    // This endpoint only stores the client count data
+
+    return ApiResponse.ok(res, 'UDM client count updated successfully', udmData);
+
+  } catch (error: any) {
+    logger.error('Failed to update UDM client count', {
+      clientCount,
+      threshold: UDM_THRESHOLD,
+      error: error.message,
+    });
+
+    return ApiResponse.internalError(
+      res,
+      'Failed to update UDM client count',
+      error.message
+    );
+  }
+});
+
+// Simple endpoint for bash scripts - returns just the client count number
+router.get('/udm/count', async (_req: Request, res: Response) => {
+  try {
+    const redis = getRedisClient();
+    const udmData = await redis.get('udm:client_count');
+
+    if (!udmData) {
+      // Return 0 if no data found
+      res.setHeader('Content-Type', 'text/plain');
+      return res.status(200).send('0');
+    }
+
+    const parsedData = JSON.parse(udmData);
+    
+    // Return just the number as plain text
+    res.setHeader('Content-Type', 'text/plain');
+    return res.status(200).send(parsedData.clientCount.toString());
+
+  } catch (error: any) {
+    logger.error('Failed to get UDM client count', {
+      error: error.message,
+    });
+
+    // Return 0 on error
+    res.setHeader('Content-Type', 'text/plain');
+    return res.status(200).send('0');
+  }
+});
+
+router.get('/udm/status', async (_req: Request, res: Response) => {
+  try {
+    const redis = getRedisClient();
+    const udmData = await redis.get('udm:client_count');
+
+    if (!udmData) {
+      return ApiResponse.notFound(res, 'No UDM client count data found');
+    }
+
+    const parsedData = JSON.parse(udmData);
+    
+    // Also get current server task status
+    const taskKey = generateServerStateTaskKey('main-server');
+    const currentTask = await redis.get(taskKey);
+    
+    const responseData = {
+      ...parsedData,
+      currentTask: currentTask ? JSON.parse(currentTask) : null,
+      lastUpdateAgo: `${Math.round((Date.now() - parsedData.lastUpdate) / 1000)}s ago`
+    };
+
+    return ApiResponse.ok(res, 'UDM status retrieved successfully', responseData);
+
+  } catch (error: any) {
+    logger.error('Failed to get UDM status', {
+      error: error.message,
+    });
+
+    return ApiResponse.internalError(
+      res,
+      'Failed to get UDM status',
+      error.message
+    );
+  }
+});
 
 router.put('/servers/:serverName/states', async (req: Request, res: Response) => {
   const { serverName } = req.params;
